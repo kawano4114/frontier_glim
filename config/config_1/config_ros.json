@@ -54,7 +54,7 @@
     "points_time_offset": 0.0,
     "acc_scale": 0.0, // Auto-detect if zero
     // TF config
-    "imu_frame_id": "", // Auto-detect if blank
+    "imu_frame_id": "", // Auto-detect if blank 
     "lidar_frame_id": "", // Auto-detect if blank
     "base_frame_id": "", // If blank, IMU frame ID is used
     "odom_frame_id": "odom",

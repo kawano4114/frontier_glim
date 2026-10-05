@@ -4,7 +4,7 @@ from launch import LaunchDescription
 from launch_ros.actions import Node
 
 def generate_launch_description():
-    config_path = os.path.join(get_package_share_directory('glim_ros'), 'config', 'config_1')
+    config_path = os.path.join(get_package_share_directory('glim_ros'), 'config', 'config_gazebo')
 
     return LaunchDescription([
         Node(
@@ -12,6 +12,9 @@ def generate_launch_description():
             executable='glim_rosnode',
             name='glim_rosnode',
             output='screen',
-            parameters=[{'config_path': config_path}],
+            parameters=[
+                {'config_path': config_path},
+                {"use_sim_time": True}
+            ],
         )
     ])

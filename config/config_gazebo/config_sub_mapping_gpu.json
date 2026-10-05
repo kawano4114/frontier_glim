@@ -33,11 +33,12 @@
     "enable_imu": true,
     "enable_optimization": false,
     // Keyframe update strategy
-    "max_num_keyframes": 15,
-    "keyframe_update_strategy": "OVERLAP",
+    "max_num_keyframes": 10,
+    // "keyframe_update_strategy": "OVERLAP",
+    "keyframe_update_strategy": "DISPLACEMENT",
     "keyframe_update_min_points": 500,
     "keyframe_update_interval_rot": 3.14,
-    "keyframe_update_interval_trans": 1.0,
+    "keyframe_update_interval_trans": 0.1,
     "max_keyframe_overlap": 0.6,
     // Relative pose factors
     "create_between_factors": false,
@@ -51,6 +52,7 @@
     // Post processing
     "submap_downsample_resolution": 0.1,
     "submap_voxel_resolution": 0.5,
-    "submap_target_num_points": 50000
+    "submap_target_num_points": 10000
+    // "submap_target_num_points": 50000
   }
 }

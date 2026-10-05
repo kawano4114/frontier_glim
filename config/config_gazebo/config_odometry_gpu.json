@@ -43,7 +43,8 @@
     "initialization_window_size": 1.0,
     "init_pose_damping_scale": 1e10,
     // Optimization params
-    "smoother_lag": 5.0,
+    "smoother_lag": 1.0,
+    // "smoother_lag": 5.0,
     "use_isam2_dogleg": false,
     "isam2_relinearize_skip": 1,
     "isam2_relinearize_thresh": 0.1,

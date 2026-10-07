@@ -21,6 +21,7 @@ find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(glim_ros_interfaces
   "msg/Submap.msg"
+  LIBRARY_NAME ${PROJECT_NAME}
   DEPENDENCIES std_msgs geometry_msgs sensor_msgs nav_msgs
 )
 

@@ -113,7 +113,7 @@ ament_auto_add_library(submap_bridge SHARED NO_TARGET_LINK_LIBRARIES
   src/glim_ros/submap_bridge/submap_bridge.cpp
 )
 rosidl_get_typesupport_target(submap_typesupport glim_ros_interfaces "rosidl_typesupport_cpp")
-target_link_libraries(submap_bridge PRIVATE
+target_link_libraries(submap_bridge
   glim::glim
   "${submap_typesupport}"
 )

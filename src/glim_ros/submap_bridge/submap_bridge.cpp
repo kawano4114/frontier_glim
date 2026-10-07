@@ -1,6 +1,5 @@
 #include <glim_ros/submap_bridge/submap_bridge.hpp>
 
-#include <array>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -39,9 +38,8 @@ struct SubmapBridge::State {
   std::string odom_frame_id;
   std::string map_frame_id;
   rclcpp::Publisher<glim_ros::msg::Submap>::SharedPtr submap_pub;
-  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr map_cloud_pub;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr submap_cloud_pub;
   std::mutex mutex;
-  std::vector<std::array<float, 3>> map_points;
   bool active = true;
 };
 
@@ -55,12 +53,12 @@ SubmapBridge::~SubmapBridge() {
   std::lock_guard<std::mutex> lock(state->mutex);
   state->active = false;
   state->submap_pub.reset();
-  state->map_cloud_pub.reset();
+  state->submap_cloud_pub.reset();
 }
 
 std::vector<GenericTopicSubscription::Ptr> SubmapBridge::create_subscriptions(rclcpp::Node& node) {
   state->submap_pub = node.create_publisher<glim_ros::msg::Submap>("/glim/submap", rclcpp::QoS(10).reliable());
-  state->map_cloud_pub = node.create_publisher<sensor_msgs::msg::PointCloud2>("/glim/submaps", rclcpp::QoS(1).reliable().transient_local());
+  state->submap_cloud_pub = node.create_publisher<sensor_msgs::msg::PointCloud2>("/glim/submap_cloud", rclcpp::QoS(1).reliable().transient_local());
 
   // CallbackSlot has no synchronized removal. Keep a weak reference so a
   // mapping callback already in progress cannot access a destroyed module.
@@ -79,7 +77,7 @@ void SubmapBridge::on_new_submap(const std::shared_ptr<State>& state, const SubM
     return;
   }
 
-  if (!submap || !submap->frame || submap->frame->size() == 0 || submap->frames.empty() || !state->submap_pub || !state->map_cloud_pub) {
+  if (!submap || !submap->frame || submap->frame->size() == 0 || submap->frames.empty() || !state->submap_pub || !state->submap_cloud_pub) {
     spdlog::warn("SubmapBridge: incomplete or empty submap; skipping publication");
     return;
   }
@@ -114,34 +112,23 @@ void SubmapBridge::on_new_submap(const std::shared_ptr<State>& state, const SubM
   state->submap_pub->publish(msg);
 
   // With Global Mapping disabled, GLIM's world is odom and map -> odom
-  // remains identity. Keep all completed submaps visible in RViz's map frame.
-  sensor_msgs::msg::PointCloud2 map_cloud;
-  map_cloud.header.frame_id = state->map_frame_id;
-  map_cloud.header.stamp = msg.header.stamp;
-
-  state->map_points.reserve(state->map_points.size() + submap->frame->size());
+  // remains identity. Publish only this completed submap for RViz.
+  sensor_msgs::msg::PointCloud2 submap_cloud = msg.cloud;
+  submap_cloud.header.frame_id = state->map_frame_id;
+  sensor_msgs::PointCloud2Iterator<float> x(submap_cloud, "x");
+  sensor_msgs::PointCloud2Iterator<float> y(submap_cloud, "y");
+  sensor_msgs::PointCloud2Iterator<float> z(submap_cloud, "z");
   for (int i = 0; i < submap->frame->size(); ++i) {
     const Eigen::Vector3d point = T_odom_submap * submap->frame->points[i].head<3>();
-    state->map_points.push_back({static_cast<float>(point.x()), static_cast<float>(point.y()), static_cast<float>(point.z())});
-  }
-
-  sensor_msgs::PointCloud2Modifier modifier(map_cloud);
-  modifier.setPointCloud2FieldsByString(1, "xyz");
-  modifier.resize(state->map_points.size());
-
-  sensor_msgs::PointCloud2Iterator<float> x(map_cloud, "x");
-  sensor_msgs::PointCloud2Iterator<float> y(map_cloud, "y");
-  sensor_msgs::PointCloud2Iterator<float> z(map_cloud, "z");
-  for (const auto& point : state->map_points) {
-    *x = point[0];
-    *y = point[1];
-    *z = point[2];
+    *x = static_cast<float>(point.x());
+    *y = static_cast<float>(point.y());
+    *z = static_cast<float>(point.z());
     ++x;
     ++y;
     ++z;
   }
 
-  state->map_cloud_pub->publish(map_cloud);
+  state->submap_cloud_pub->publish(submap_cloud);
   spdlog::info("SubmapBridge: published completed submap {} ({} points)", submap->id, submap->frame->size());
 }
 

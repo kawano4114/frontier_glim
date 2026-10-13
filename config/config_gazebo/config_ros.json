@@ -29,6 +29,7 @@
   // imu_topic              : IMU topic
   // points_topic           : Points topic
   // image_topic            : Image topic (required for only extension modules)
+  // optimize_topic         : std_msgs/msg/Empty trigger (accepted only in optimization_mode=3)
   //
   // --- QoS options ---
   // imu_qos                : QoS options for IMU topic subscription.
@@ -46,7 +47,7 @@
   "glim_ros": {
     // Backend modules
     "enable_local_mapping": true,
-    "enable_global_mapping": false,
+    "enable_global_mapping": true,
     // Points config
     "keep_raw_points": false,
     // IMU config
@@ -73,6 +74,7 @@
     "imu_topic": "/imu/data",
     "points_topic": "/points",
     "image_topic": "/image",
+    "optimize_topic": "/glim_ros/optimize",
     // QoS options
     "imu_qos": {
       "profile": "sensor_data",

@@ -111,10 +111,10 @@ void SubmapBridge::on_new_submap(const std::shared_ptr<State>& state, const SubM
 
   state->submap_pub->publish(msg);
 
-  // With Global Mapping disabled, GLIM's world is odom and map -> odom
-  // remains identity. Publish only this completed submap for RViz.
+  // This completed submap is expressed in odom. Keep that frame contract even
+  // when Global Mapping applies a correction to map -> odom.
   sensor_msgs::msg::PointCloud2 submap_cloud = msg.cloud;
-  submap_cloud.header.frame_id = state->map_frame_id;
+  submap_cloud.header.frame_id = state->odom_frame_id;
   sensor_msgs::PointCloud2Iterator<float> x(submap_cloud, "x");
   sensor_msgs::PointCloud2Iterator<float> y(submap_cloud, "y");
   sensor_msgs::PointCloud2Iterator<float> z(submap_cloud, "z");

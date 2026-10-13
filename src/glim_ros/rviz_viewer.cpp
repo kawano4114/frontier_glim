@@ -471,6 +471,9 @@ void RvizViewer::odometry_new_frame(const EstimationFrame::ConstPtr& new_frame, 
 }
 
 void RvizViewer::globalmap_on_update_submaps(const std::vector<SubMap::Ptr>& submaps) {
+  if (submaps.empty()) {
+    return;
+  }
   const SubMap::ConstPtr latest_submap = submaps.back();
 
   const double stamp_endpoint_R = latest_submap->odom_frames.back()->stamp;
@@ -481,21 +484,25 @@ void RvizViewer::globalmap_on_update_submaps(const std::vector<SubMap::Ptr>& sub
   }
 
   std::vector<Eigen::Isometry3d, Eigen::aligned_allocator<Eigen::Isometry3d>> submap_poses(submaps.size());
-  for (int i = 0; i < submaps.size(); i++) {
+  std::vector<gtsam_points::PointCloud::ConstPtr> submap_frames(submaps.size());
+  for (size_t i = 0; i < submaps.size(); i++) {
     submap_poses[i] = submaps[i]->T_world_origin;
+    submap_frames[i] = submaps[i]->frame;
   }
 
-  // Invoke a submap concatenation task in the RvizViewer thread
-  invoke([this, latest_submap, submap_poses] {
-    this->submaps.push_back(latest_submap->frame);
+  // Snapshot both poses and immutable clouds on the mapping thread. A pose-only
+  // update must replace the map without adding the latest submap a second time.
+  invoke([this, submap_frames = std::move(submap_frames), submap_poses = std::move(submap_poses)] {
+    const bool pose_only_update = this->submaps.size() == submap_frames.size();
+    this->submaps = submap_frames;
 
-    if (!map_pub->get_subscription_count()) {
+    if (!map_pub || !map_pub->get_subscription_count()) {
       return;
     }
 
-    // Publish global map every 10 seconds
+    // Throttle map growth, but publish correction results immediately.
     const rclcpp::Time now = rclcpp::Clock(rcl_clock_type_t::RCL_ROS_TIME).now();
-    if (now - last_globalmap_pub_time < std::chrono::seconds(10)) {
+    if (!pose_only_update && now - last_globalmap_pub_time < std::chrono::seconds(10)) {
       return;
     }
     last_globalmap_pub_time = now;

@@ -7,6 +7,7 @@
 
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <std_msgs/msg/empty.hpp>
 #ifdef BUILD_WITH_CV_BRIDGE
 #include <image_transport/image_transport.hpp>
 #include <sensor_msgs/msg/image.hpp>
@@ -31,6 +32,7 @@ public:
   void timer_callback();
 
   void imu_callback(const sensor_msgs::msg::Imu::SharedPtr msg);
+  void optimize_callback(const std_msgs::msg::Empty::ConstSharedPtr msg);
 #ifdef BUILD_WITH_CV_BRIDGE
   void image_callback(const sensor_msgs::msg::Image::ConstSharedPtr msg);
 #endif
@@ -65,6 +67,7 @@ private:
   rclcpp::TimerBase::SharedPtr timer;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr points_sub;
+  rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr optimize_sub;
 #ifdef BUILD_WITH_CV_BRIDGE
   image_transport::Subscriber image_sub;
 #endif

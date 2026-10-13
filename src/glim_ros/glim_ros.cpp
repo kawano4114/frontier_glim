@@ -178,6 +178,7 @@ GlimROS::GlimROS(const rclcpp::NodeOptions& options) : Node("glim_ros", options)
   const std::string imu_topic = config_ros.param<std::string>("glim_ros", "imu_topic", "");
   const std::string points_topic = config_ros.param<std::string>("glim_ros", "points_topic", "");
   const std::string image_topic = config_ros.param<std::string>("glim_ros", "image_topic", "");
+  const std::string optimize_topic = config_ros.param<std::string>("glim_ros", "optimize_topic", "/glim_ros/optimize");
 
   // Subscribers
   rclcpp::SensorDataQoS default_imu_qos;
@@ -187,6 +188,8 @@ GlimROS::GlimROS(const rclcpp::NodeOptions& options) : Node("glim_ros", options)
 
   qos = get_qos_settings(config_ros, "glim_ros", "points_qos");
   points_sub = this->create_subscription<sensor_msgs::msg::PointCloud2>(points_topic, qos, std::bind(&GlimROS::points_callback, this, _1));
+  optimize_sub = this->create_subscription<std_msgs::msg::Empty>(optimize_topic, rclcpp::QoS(10), std::bind(&GlimROS::optimize_callback, this, _1));
+  spdlog::info("subscribe to Empty optimization trigger: {}", optimize_topic);
 #ifdef BUILD_WITH_CV_BRIDGE
   qos = get_qos_settings(config_ros, "glim_ros", "image_qos");
   image_sub = image_transport::create_subscription(this, image_topic, std::bind(&GlimROS::image_callback, this, _1), "raw", qos.get_rmw_qos_profile());
@@ -216,6 +219,22 @@ GlimROS::~GlimROS() {
 
 const std::vector<std::shared_ptr<GenericTopicSubscription>>& GlimROS::extension_subscriptions() {
   return extension_subs;
+}
+
+void GlimROS::optimize_callback(const std_msgs::msg::Empty::ConstSharedPtr /*msg*/) {
+  if (!global_mapping) {
+    spdlog::info("Empty optimization trigger received: ignored (global mapping is disabled)");
+    return;
+  }
+
+  // Log receipt before queueing. The mode is immutable after startup, so this
+  // callback does not need to wait for the mapping/optimization mutex.
+  const int mode = global_mapping->get_optimization_mode();
+  const bool accepted = mode == 3;
+  spdlog::info("Empty optimization trigger received: {} (optimization_mode={})", accepted ? "accepted" : "ignored", mode);
+  if (accepted) {
+    global_mapping->request_optimization();
+  }
 }
 
 void GlimROS::imu_callback(const sensor_msgs::msg::Imu::SharedPtr msg) {

@@ -10,7 +10,7 @@ def generate_launch_description():
         Node(
             package='glim_ros',
             executable='glim_rosnode',
-            name='glim_rosnode',
+            name='glim_ros',
             output='screen',
             parameters=[
                 {'config_path': config_path},

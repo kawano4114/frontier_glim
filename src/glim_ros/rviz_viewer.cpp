@@ -1,6 +1,9 @@
 #include <glim_ros/rviz_viewer.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <mutex>
+#include <stdexcept>
 #include <spdlog/spdlog.h>
 #include <rclcpp/clock.hpp>
 
@@ -30,29 +33,23 @@ RvizViewer::RvizViewer() : logger(create_module_logger("rviz")) {
   publish_imu2lidar = config.param<bool>("glim_ros", "publish_imu2lidar", true);
   tf_time_offset = config.param<double>("glim_ros", "tf_time_offset", 1e-6);
 
-  last_globalmap_pub_time = rclcpp::Clock(rcl_clock_type_t::RCL_ROS_TIME).now();
+  ros_pub_interval_time = config.param<double>("glim_ros", "ros_pub_interval_time", 20.0);
+  if (!std::isfinite(ros_pub_interval_time) || ros_pub_interval_time <= 0.0) {
+    throw std::invalid_argument("glim_ros.ros_pub_interval_time must be a positive finite interval in seconds");
+  }
+  logger->info("global map publication interval: {} s", ros_pub_interval_time);
   trajectory.reset(new TrajectoryManager);
 
   set_callbacks();
 
   kill_switch = false;
-  thread = std::thread([this] {
-    while (!kill_switch) {
-      const auto expected = std::chrono::milliseconds(10);
-      const auto t1 = std::chrono::high_resolution_clock::now();
-      spin_once();
-      const auto t2 = std::chrono::high_resolution_clock::now();
-
-      if (t2 - t1 < expected) {
-        std::this_thread::sleep_for(expected - (t2 - t1));
-      }
-    }
-  });
 }
 
 RvizViewer::~RvizViewer() {
   kill_switch = true;
-  thread.join();
+  if (thread.joinable()) {
+    thread.join();
+  }
 }
 
 std::vector<GenericTopicSubscription::Ptr> RvizViewer::create_subscriptions(rclcpp::Node& node) {
@@ -98,6 +95,23 @@ std::vector<GenericTopicSubscription::Ptr> RvizViewer::create_subscriptions(rclc
   lidar_pose_scanend_pub = node.create_publisher<geometry_msgs::msg::PoseStamped>("~/lidar_pose_scanend", 10);
   lidar_pose_corrected_pub = node.create_publisher<geometry_msgs::msg::PoseStamped>("~/lidar_pose_corrected", 10);
   lidar_pose_scanend_corrected_pub = node.create_publisher<geometry_msgs::msg::PoseStamped>("~/lidar_pose_scanend_corrected", 10);
+
+  // Initialize every publisher before the periodic worker can access them.
+  // Use wall time for the interval and the node clock for message stamps.
+  map_clock = node.get_clock();
+  last_globalmap_pub_time = std::chrono::steady_clock::now();
+  thread = std::thread([this] {
+    while (!kill_switch) {
+      const auto expected = std::chrono::milliseconds(10);
+      const auto start = std::chrono::steady_clock::now();
+      spin_once();
+      publish_globalmap();
+      const auto elapsed = std::chrono::steady_clock::now() - start;
+      if (elapsed < expected) {
+        std::this_thread::sleep_for(expected - elapsed);
+      }
+    }
+  });
 
   return {};
 }
@@ -490,46 +504,54 @@ void RvizViewer::globalmap_on_update_submaps(const std::vector<SubMap::Ptr>& sub
     submap_frames[i] = submaps[i]->frame;
   }
 
-  // Snapshot both poses and immutable clouds on the mapping thread. A pose-only
-  // update must replace the map without adding the latest submap a second time.
-  invoke([this, submap_frames = std::move(submap_frames), submap_poses = std::move(submap_poses)] {
-    const bool pose_only_update = this->submaps.size() == submap_frames.size();
-    this->submaps = submap_frames;
+  // The mapping callback only updates the worker's snapshot. Map growth and
+  // correction are both published at the next configured interval.
+  invoke([this, submap_frames = std::move(submap_frames), submap_poses = std::move(submap_poses)]() mutable {
+    this->submaps = std::move(submap_frames);
+    this->submap_poses = std::move(submap_poses);
+    globalmap_dirty = true;
+  });
+}
 
-    if (!map_pub || !map_pub->get_subscription_count()) {
-      return;
-    }
+void RvizViewer::publish_globalmap() {
+  if (!map_pub || submaps.empty()) {
+    return;
+  }
+  const auto now = std::chrono::steady_clock::now();
+  if (now - last_globalmap_pub_time < std::chrono::duration<double>(ros_pub_interval_time)) {
+    return;
+  }
 
-    // Throttle map growth, but publish correction results immediately.
-    const rclcpp::Time now = rclcpp::Clock(rcl_clock_type_t::RCL_ROS_TIME).now();
-    if (!pose_only_update && now - last_globalmap_pub_time < std::chrono::seconds(10)) {
-      return;
-    }
-    last_globalmap_pub_time = now;
-
-    logger->warn("Publishing global map is computationally demanding and not recommended");
-
-    int total_num_points = 0;
-    for (const auto& submap : this->submaps) {
+  if (globalmap_dirty || !globalmap_message) {
+    size_t total_num_points = 0;
+    for (const auto& submap : submaps) {
       total_num_points += submap->size();
     }
 
-    // Concatenate all the submap points
+    // Rebuild only when a submap was added or a pose was updated. Subsequent
+    // intervals reuse the serialized cloud even if no sensor input arrives.
     gtsam_points::PointCloudCPU::Ptr merged(new gtsam_points::PointCloudCPU);
     merged->num_points = total_num_points;
     merged->points_storage.resize(total_num_points);
     merged->points = merged->points_storage.data();
 
-    int begin = 0;
-    for (int i = 0; i < this->submaps.size(); i++) {
-      const auto& submap = this->submaps[i];
+    size_t begin = 0;
+    for (size_t i = 0; i < submaps.size(); i++) {
+      const auto& submap = submaps[i];
       std::transform(submap->points, submap->points + submap->size(), merged->points + begin, [&](const Eigen::Vector4d& p) { return submap_poses[i] * p; });
       begin += submap->size();
     }
 
-    auto points_msg = frame_to_pointcloud2(map_frame_id, now.seconds(), *merged);
-    map_pub->publish(*points_msg);
-  });
+    globalmap_message = std::make_shared<sensor_msgs::msg::PointCloud2>(*frame_to_pointcloud2(map_frame_id, 0.0, *merged));
+    globalmap_dirty = false;
+  }
+
+  globalmap_message->header.stamp = map_clock->now();
+  // Global map publication deliberately does not depend on subscriber count.
+  map_pub->publish(*globalmap_message);
+  // Start the next interval after this publication; long merges never cause a
+  // burst of overdue messages.
+  last_globalmap_pub_time = std::chrono::steady_clock::now();
 }
 
 void RvizViewer::invoke(const std::function<void()>& task) {

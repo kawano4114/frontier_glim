@@ -2,8 +2,11 @@
 
 #include <any>
 #include <atomic>
+#include <functional>
+#include <mutex>
 #include <thread>
 #include <chrono>
+#include <vector>
 
 #include <rclcpp/rclcpp.hpp>
 #include <tf2_ros/buffer.h>
@@ -41,6 +44,7 @@ private:
   void set_callbacks();
   void odometry_new_frame(const EstimationFrame::ConstPtr& new_frame, bool corrected);
   void globalmap_on_update_submaps(const std::vector<SubMap::Ptr>& submaps);
+  void publish_globalmap();
   void invoke(const std::function<void()>& task);
 
   void spin_once();
@@ -53,7 +57,9 @@ private:
   std::unique_ptr<tf2_ros::TransformListener> tf_listener;
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster;
 
-  rclcpp::Time last_globalmap_pub_time;
+  rclcpp::Clock::SharedPtr map_clock;
+  std::chrono::steady_clock::time_point last_globalmap_pub_time;
+  double ros_pub_interval_time;
 
   std::string imu_frame_id;
   std::string lidar_frame_id;
@@ -93,6 +99,9 @@ private:
   std::unique_ptr<TrajectoryManager> trajectory;
 
   std::vector<gtsam_points::PointCloud::ConstPtr> submaps;
+  std::vector<Eigen::Isometry3d, Eigen::aligned_allocator<Eigen::Isometry3d>> submap_poses;
+  sensor_msgs::msg::PointCloud2::SharedPtr globalmap_message;
+  bool globalmap_dirty = false;
 
   std::mutex invoke_queue_mutex;
   std::vector<std::function<void()>> invoke_queue;

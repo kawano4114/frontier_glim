@@ -46,6 +46,9 @@ RvizViewer::RvizViewer() : logger(create_module_logger("rviz")) {
 }
 
 RvizViewer::~RvizViewer() {
+  // Disconnect producers and wait for callbacks already using this viewer.
+  // Keep the worker and all fields alive until those callbacks have returned.
+  callback_connections.clear();
   kill_switch = true;
   if (thread.joinable()) {
     thread.join();
@@ -118,9 +121,9 @@ std::vector<GenericTopicSubscription::Ptr> RvizViewer::create_subscriptions(rclc
 
 void RvizViewer::set_callbacks() {
   using std::placeholders::_1;
-  OdometryEstimationCallbacks::on_new_frame.add([this](const EstimationFrame::ConstPtr& new_frame) { odometry_new_frame(new_frame, false); });
-  OdometryEstimationCallbacks::on_update_new_frame.add([this](const EstimationFrame::ConstPtr& new_frame) { odometry_new_frame(new_frame, true); });
-  GlobalMappingCallbacks::on_update_submaps.add(std::bind(&RvizViewer::globalmap_on_update_submaps, this, _1));
+  callback_connections.add(OdometryEstimationCallbacks::on_new_frame, [this](const EstimationFrame::ConstPtr& new_frame) { odometry_new_frame(new_frame, false); });
+  callback_connections.add(OdometryEstimationCallbacks::on_update_new_frame, [this](const EstimationFrame::ConstPtr& new_frame) { odometry_new_frame(new_frame, true); });
+  callback_connections.add(GlobalMappingCallbacks::on_update_submaps, std::bind(&RvizViewer::globalmap_on_update_submaps, this, _1));
 }
 
 void RvizViewer::odometry_new_frame(const EstimationFrame::ConstPtr& new_frame, bool corrected) {
@@ -507,6 +510,21 @@ void RvizViewer::globalmap_on_update_submaps(const std::vector<SubMap::Ptr>& sub
   // The mapping callback only updates the worker's snapshot. Map growth and
   // correction are both published at the next configured interval.
   invoke([this, submap_frames = std::move(submap_frames), submap_poses = std::move(submap_poses)]() mutable {
+    bool changed = this->submaps.size() != submap_frames.size() || this->submap_poses.size() != submap_poses.size();
+    if (!changed) {
+      for (size_t i = 0; i < submap_frames.size(); i++) {
+        // Clouds are immutable once submitted to Global Mapping. Exact pose
+        // comparison preserves even small real corrections without rebuilding
+        // the cloud for a notification containing the same snapshot.
+        if (this->submaps[i] != submap_frames[i] || !(this->submap_poses[i].matrix().array() == submap_poses[i].matrix().array()).all()) {
+          changed = true;
+          break;
+        }
+      }
+    }
+    if (!changed) {
+      return;
+    }
     this->submaps = std::move(submap_frames);
     this->submap_poses = std::move(submap_poses);
     globalmap_dirty = true;

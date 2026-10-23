@@ -2,8 +2,10 @@
 
 #include <any>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <rclcpp/rclcpp.hpp>
+#include <glim/util/callback_slot.hpp>
 
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
@@ -71,6 +73,12 @@ private:
 #ifdef BUILD_WITH_CV_BRIDGE
   image_transport::Subscriber image_sub;
 #endif
+
+  using ROSCallbackSlot = CallbackSlot<void(const std::function<void(GlimROS&)>&)>;
+  // Declared last so constructor unwinding disconnects callbacks before any
+  // state they access is destroyed, while the dispatcher itself remains alive.
+  std::shared_ptr<ROSCallbackSlot> ros_callback_dispatch;
+  CallbackConnections ros_callback_connections;
 };
 
 }  // namespace glim

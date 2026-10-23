@@ -174,25 +174,43 @@ GlimROS::GlimROS(const rclcpp::NodeOptions& options) : Node("glim_ros", options)
   }
 
   // ROS-related
-  using std::placeholders::_1;
   const std::string imu_topic = config_ros.param<std::string>("glim_ros", "imu_topic", "");
   const std::string points_topic = config_ros.param<std::string>("glim_ros", "points_topic", "");
   const std::string image_topic = config_ros.param<std::string>("glim_ros", "image_topic", "");
   const std::string optimize_topic = config_ros.param<std::string>("glim_ros", "optimize_topic", "/glim_ros/optimize");
 
+  // ROS closures retain this dispatcher rather than a raw node pointer. Removing
+  // its tracked callback waits for current calls and makes queued calls harmless.
+  ros_callback_dispatch = std::make_shared<ROSCallbackSlot>();
+  ros_callback_connections.add(*ros_callback_dispatch, [this](const std::function<void(GlimROS&)>& callback) { callback(*this); });
+  const auto callback_dispatch = ros_callback_dispatch;
+
   // Subscribers
   rclcpp::SensorDataQoS default_imu_qos;
   default_imu_qos.get_rmw_qos_profile().depth = 1000;
   auto qos = get_qos_settings(config_ros, "glim_ros", "imu_qos", default_imu_qos);
-  imu_sub = this->create_subscription<sensor_msgs::msg::Imu>(imu_topic, qos, std::bind(&GlimROS::imu_callback, this, _1));
+  imu_sub = this->create_subscription<sensor_msgs::msg::Imu>(imu_topic, qos, [callback_dispatch](const sensor_msgs::msg::Imu::SharedPtr msg) {
+    callback_dispatch->call([&msg](GlimROS& node) { node.imu_callback(msg); });
+  });
 
   qos = get_qos_settings(config_ros, "glim_ros", "points_qos");
-  points_sub = this->create_subscription<sensor_msgs::msg::PointCloud2>(points_topic, qos, std::bind(&GlimROS::points_callback, this, _1));
-  optimize_sub = this->create_subscription<std_msgs::msg::Empty>(optimize_topic, rclcpp::QoS(10), std::bind(&GlimROS::optimize_callback, this, _1));
+  points_sub = this->create_subscription<sensor_msgs::msg::PointCloud2>(points_topic, qos, [callback_dispatch](const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg) {
+    callback_dispatch->call([&msg](GlimROS& node) { node.points_callback(msg); });
+  });
+  optimize_sub = this->create_subscription<std_msgs::msg::Empty>(optimize_topic, rclcpp::QoS(10), [callback_dispatch](const std_msgs::msg::Empty::ConstSharedPtr msg) {
+    callback_dispatch->call([&msg](GlimROS& node) { node.optimize_callback(msg); });
+  });
   spdlog::info("subscribe to Empty optimization trigger: {}", optimize_topic);
 #ifdef BUILD_WITH_CV_BRIDGE
   qos = get_qos_settings(config_ros, "glim_ros", "image_qos");
-  image_sub = image_transport::create_subscription(this, image_topic, std::bind(&GlimROS::image_callback, this, _1), "raw", qos.get_rmw_qos_profile());
+  image_sub = image_transport::create_subscription(
+    this,
+    image_topic,
+    [callback_dispatch](const sensor_msgs::msg::Image::ConstSharedPtr msg) {
+      callback_dispatch->call([&msg](GlimROS& node) { node.image_callback(msg); });
+    },
+    "raw",
+    qos.get_rmw_qos_profile());
 #endif
 
   for (const auto& sub : this->extension_subscriptions()) {
@@ -201,20 +219,41 @@ GlimROS::GlimROS(const rclcpp::NodeOptions& options) : Node("glim_ros", options)
   }
 
   // Start timer
-  timer = this->create_wall_timer(std::chrono::milliseconds(1), [this]() { timer_callback(); });
+  timer = this->create_wall_timer(std::chrono::milliseconds(1), [callback_dispatch]() {
+    callback_dispatch->call([](GlimROS& node) { node.timer_callback(); });
+  });
 
   spdlog::debug("initialized");
 }
 
 GlimROS::~GlimROS() {
+  // Disable node access and wait for in-flight ROS callbacks before touching
+  // subscriptions, pipeline workers, or extensions. Late queued calls see an
+  // empty dispatcher that they own independently of this node's lifetime.
+  ros_callback_connections.clear();
   spdlog::debug("quit");
-  extension_modules.clear();
+
+  // Stop ROS input before draining the pipeline. Extensions must stay alive
+  // while the odometry and mapping workers finish their remaining callbacks.
+  if (timer) {
+    timer->cancel();
+  }
+  timer.reset();
+  imu_sub.reset();
+  points_sub.reset();
+  optimize_sub.reset();
+#ifdef BUILD_WITH_CV_BRIDGE
+  image_sub.shutdown();
+#endif
+  extension_subs.clear();
+
+  wait(true);
 
   if (dump_on_unload) {
     std::string dump_path = "/tmp/dump";
-    wait(true);
     save(dump_path);
   }
+  extension_modules.clear();
 }
 
 const std::vector<std::shared_ptr<GenericTopicSubscription>>& GlimROS::extension_subscriptions() {
@@ -386,9 +425,13 @@ void GlimROS::wait(bool auto_quit) {
       for (const auto& submap : submaps) {
         global_mapping->insert_submap(submap);
       }
-      spdlog::info("waiting for global mapping");
-      global_mapping->join();
     }
+  }
+
+  // Global Mapping can be enabled independently of Local Mapping.
+  if (global_mapping) {
+    spdlog::info("waiting for global mapping");
+    global_mapping->join();
   }
 
   if (!auto_quit) {

@@ -19,6 +19,7 @@
 
 #include <glim/odometry/estimation_frame.hpp>
 #include <glim/mapping/sub_map.hpp>
+#include <glim/util/callback_slot.hpp>
 #include <glim/util/extension_module.hpp>
 #include <glim/util/extension_module_ros2.hpp>
 
@@ -108,5 +109,6 @@ private:
 
   // Logging
   std::shared_ptr<spdlog::logger> logger;
+  CallbackConnections callback_connections;
 };
 }  // namespace glim

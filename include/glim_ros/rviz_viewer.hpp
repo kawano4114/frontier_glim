@@ -15,6 +15,7 @@
 
 #include <nav_msgs/msg/odometry.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/transform_stamped.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 
 #include <glim/odometry/estimation_frame.hpp>
@@ -100,6 +101,7 @@ private:
   std::unique_ptr<TrajectoryManager> trajectory;
 
   std::vector<gtsam_points::PointCloud::ConstPtr> submaps;
+  std::vector<int> submap_ids;
   std::vector<Eigen::Isometry3d, Eigen::aligned_allocator<Eigen::Isometry3d>> submap_poses;
   sensor_msgs::msg::PointCloud2::SharedPtr globalmap_message;
   bool globalmap_dirty = false;

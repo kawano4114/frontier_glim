@@ -4,6 +4,7 @@
 #include <cmath>
 #include <mutex>
 #include <stdexcept>
+#include <string>
 #include <spdlog/spdlog.h>
 #include <rclcpp/clock.hpp>
 
@@ -502,15 +503,17 @@ void RvizViewer::globalmap_on_update_submaps(const std::vector<SubMap::Ptr>& sub
 
   std::vector<Eigen::Isometry3d, Eigen::aligned_allocator<Eigen::Isometry3d>> submap_poses(submaps.size());
   std::vector<gtsam_points::PointCloud::ConstPtr> submap_frames(submaps.size());
+  std::vector<int> submap_ids(submaps.size());
   for (size_t i = 0; i < submaps.size(); i++) {
     submap_poses[i] = submaps[i]->T_world_origin;
     submap_frames[i] = submaps[i]->frame;
+    submap_ids[i] = submaps[i]->id;
   }
 
   // The mapping callback only updates the worker's snapshot. Map growth and
   // correction are both published at the next configured interval.
-  invoke([this, submap_frames = std::move(submap_frames), submap_poses = std::move(submap_poses)]() mutable {
-    bool changed = this->submaps.size() != submap_frames.size() || this->submap_poses.size() != submap_poses.size();
+  invoke([this, submap_frames = std::move(submap_frames), submap_poses = std::move(submap_poses), submap_ids = std::move(submap_ids)]() mutable {
+    bool changed = this->submaps.size() != submap_frames.size() || this->submap_poses.size() != submap_poses.size() || this->submap_ids != submap_ids;
     if (!changed) {
       for (size_t i = 0; i < submap_frames.size(); i++) {
         // Clouds are immutable once submitted to Global Mapping. Exact pose
@@ -527,6 +530,7 @@ void RvizViewer::globalmap_on_update_submaps(const std::vector<SubMap::Ptr>& sub
     }
     this->submaps = std::move(submap_frames);
     this->submap_poses = std::move(submap_poses);
+    this->submap_ids = std::move(submap_ids);
     globalmap_dirty = true;
   });
 }
@@ -565,6 +569,29 @@ void RvizViewer::publish_globalmap() {
   }
 
   globalmap_message->header.stamp = map_clock->now();
+  // Use the map snapshot and its publication stamp for every submap transform.
+  // Keep publishing unchanged transforms too, so late listeners can receive them.
+  // Consumers can anchor points in glim_submap_<id> and transform them back using
+  // the latest TF. For a particular map, wait for TF at that map's header stamp;
+  // sending TF first does not guarantee delivery order across ROS topics.
+  std::vector<geometry_msgs::msg::TransformStamped> submap_transforms(submap_poses.size());
+  for (size_t i = 0; i < submap_poses.size(); i++) {
+    auto& transform = submap_transforms[i];
+    transform.header = globalmap_message->header;
+    transform.child_frame_id = "glim_submap_" + std::to_string(submap_ids[i]);
+
+    const auto& translation = submap_poses[i].translation();
+    const Eigen::Quaterniond rotation(submap_poses[i].linear());
+    transform.transform.translation.x = translation.x();
+    transform.transform.translation.y = translation.y();
+    transform.transform.translation.z = translation.z();
+    transform.transform.rotation.x = rotation.x();
+    transform.transform.rotation.y = rotation.y();
+    transform.transform.rotation.z = rotation.z();
+    transform.transform.rotation.w = rotation.w();
+  }
+  tf_broadcaster->sendTransform(submap_transforms);
+
   // Global map publication deliberately does not depend on subscriber count.
   map_pub->publish(*globalmap_message);
   // Start the next interval after this publication; long merges never cause a

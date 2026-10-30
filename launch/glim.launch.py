@@ -4,7 +4,7 @@ from launch import LaunchDescription
 from launch_ros.actions import Node
 
 def generate_launch_description():
-    config_path = os.path.join(get_package_share_directory('glim_ros'), 'config', 'config_gazebo')
+    config_path = os.path.join(get_package_share_directory('glim_ros'), 'config', 'config_merge')
 
     return LaunchDescription([
         Node(

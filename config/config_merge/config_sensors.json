@@ -50,10 +50,6 @@
     "imu_bias_noise": 1e-5,
 
     // LiDAR config
-    // Base-to-input-LiDAR transform [x, y, z, qx, qy, qz, qw] for submap height filtering.
-    // Set the actual mounting transform before enabling the filter. Identity is valid
-    // when input point coordinates already use the base frame. No TF lookup is performed.
-    "T_lidar_base": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
     "global_shutter_lidar": false, // 実機では必ずfalseにする
     "T_lidar_imu": [
       0.24412,
